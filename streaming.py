@@ -3,7 +3,7 @@ import uuid
 import streamlit as st
 from langchain_core.messages import HumanMessage
 
-from backend import chatbot
+from backend import chatbot, retrieve_all_threads
 
 
 def generate_thread_id() -> str:
@@ -34,11 +34,18 @@ def reset_chat() -> None:
     st.session_state["message_history"] = []
 
 
-if "chat_threads" not in st.session_state:
-    st.session_state["chat_threads"] = []
+def stream_word_by_word(text: str, delay: float = 0.03):
+    for token in re.findall(r"\S+\s*", text):
+        yield token
+        time.sleep(delay)
 
 if "thread_id" not in st.session_state:
     st.session_state["thread_id"] = generate_thread_id()
+
+if "chat_threads" not in st.session_state:
+    st.session_state["chat_threads"] = retrieve_all_threads()
+
+
 
 add_thread(st.session_state["thread_id"])
 

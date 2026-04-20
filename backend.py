@@ -134,3 +134,10 @@ if __name__ == "__main__":
             config={"configurable": {"thread_id": "1"}},
         )["messages"][-1].content
         print("chatbot:", response)
+
+
+def retrieve_all_threads() -> list[str]:
+    all_threads: set[str] = set()
+    for checkpoint in checkpointer.list(None):
+        all_threads.add(checkpoint.config["configurable"]["thread_id"])
+    return list(all_threads)
