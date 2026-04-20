@@ -1,13 +1,44 @@
 import os
 from typing import Annotated, TypedDict
+from pathlib import Path
 
 from google import genai as gemini
+from google.genai.errors import APIError
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
+import sqlite3
 
-CHAT_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+def _load_env_file(path: str = ".env") -> None:
+    env_path = Path(path)
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
+
+_load_env_file()
+
+
+CHAT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+FALLBACK_MODELS = [
+    model.strip()
+    for model in os.getenv(
+        "GEMINI_FALLBACK_MODELS",
+        "gemini-2.0-flash,gemini-2.0-flash-lite,gemini-flash-latest",
+    ).split(",")
+    if model.strip()
+]
 
 
 class ChatState(TypedDict):
@@ -15,10 +46,35 @@ class ChatState(TypedDict):
 
 
 def _build_client() -> gemini.Client | None:
-    api_key = os.getenv("GEMINI_API_KEY")
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
         return None
     return gemini.Client(api_key=api_key)
+
+
+def _generate_with_fallback(client: gemini.Client, prompt: str):
+    candidates = [CHAT_MODEL, *FALLBACK_MODELS]
+    seen: set[str] = set()
+    last_exc: APIError | None = None
+
+    for model_name in candidates:
+        if model_name in seen:
+            continue
+        seen.add(model_name)
+
+        try:
+            return client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+        except APIError as exc:
+            last_exc = exc
+            continue
+
+    if last_exc is not None:
+        raise last_exc
+
+    raise RuntimeError("No Gemini model candidates configured.")
 
 
 def chat_node(state: ChatState):
@@ -33,19 +89,35 @@ def chat_node(state: ChatState):
     messages = state["messages"]
     prompt = "\n".join(str(m.content) for m in messages)
 
-    response = client.models.generate_content(
-        model=CHAT_MODEL,
-        contents=prompt,
-    )
+    try:
+        response = _generate_with_fallback(client, prompt)
+    except APIError as exc:
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        f"Gemini API error with model '{CHAT_MODEL}': {exc}. "
+                        "Try again, or set GEMINI_MODEL/GEMINI_FALLBACK_MODELS to supported models."
+                    )
+                )
+            ]
+        }
+
     return {"messages": [AIMessage(content=response.text)]}
 
+
+
+
+conn=sqlite3.connect("chat_history.db",check_same_thread=False)
+
+
+checkpointer = SqliteSaver(conn)
 
 graph = StateGraph(ChatState)
 graph.add_node("chat_node", chat_node)
 graph.add_edge(START, "chat_node")
 graph.add_edge("chat_node", END)
 
-checkpointer = MemorySaver()
 chatbot = graph.compile(checkpointer=checkpointer)
 
 
@@ -62,4 +134,3 @@ if __name__ == "__main__":
             config={"configurable": {"thread_id": "1"}},
         )["messages"][-1].content
         print("chatbot:", response)
-
