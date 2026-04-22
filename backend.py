@@ -4,6 +4,7 @@ from pathlib import Path
 
 from google import genai as gemini
 from google.genai.errors import APIError
+from langchain.tools import tool
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
@@ -40,6 +41,33 @@ FALLBACK_MODELS = [
     if model.strip()
 ]
 
+#tools
+search_tool= DuckDuckGoSearchRun(region='us-en')
+@tool
+def calculator(first_num:float,second_num:float ,operation:str)->dict:
+    try:
+        if operation=='add':
+            result=first_num+second_num
+        elif operation=='sub':
+            result=first_num-second_num
+        elif operation=='mul':
+            result=first_num*second_num
+        elif operation=='div':
+            return{'error':'division by zero is not allowed'}
+            result=first_num/second_num if second_num!=0 else None
+        else: 
+            return{'error':'invalid operation'}
+        return {'first_num': first_num,'second_num':second_num,'operation':operation,'result':result}
+    except Exception as e:
+        return {'error': str(e)}
+    
+@tool
+def get_stock_price(symbol:str)->dict:
+    url=
+    r-requests.get(url)
+    return r.json()
+tools=[search_tool, get_stock_price, calculator]
+llm_with_tools=ll.bind_tools(tools)
 
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -104,6 +132,8 @@ def chat_node(state: ChatState):
         }
 
     return {"messages": [AIMessage(content=response.text)]}
+
+tool_node=ToolNode(tools)
 
 
 
