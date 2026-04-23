@@ -85,13 +85,16 @@ if user_input:
         }
 
     with st.chat_message("assistant"):
-        ai_message = st.write_stream(
-            str(message_chunk.content)
-            for message_chunk, _ in chatbot.stream(
-                {"messages": [HumanMessage(content=user_input)]},
-                config=config,
-                stream_mode="messages",
-            )
+        def ai_only_stream():
+            for message_chunk , metadata in chatbot.stream(
+                {"messages":[HumanMessage(content=user_input)]},
+                config=CONFIG,
+                stream_mode="messages":
+
+            ):
+            if isinstance(message_chunk, AIMessage):
+                yield message_chunk.content
+            ai_message=st.write_stream(ai_only_stream()
         )
 
     st.session_state["message_history"].append(
