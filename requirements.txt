@@ -1,5 +1,7 @@
 langgraph
 langchain_core
 langchain
+langchain-community
+ddgs
 streamlit
 google-genai

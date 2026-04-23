@@ -5,11 +5,13 @@ from pathlib import Path
 from google import genai as gemini
 from google.genai.errors import APIError
 from langchain.tools import tool
+from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 import sqlite3
+import requests
 
 
 def _load_env_file(path: str = ".env") -> None:
@@ -45,6 +47,7 @@ FALLBACK_MODELS = [
 search_tool= DuckDuckGoSearchRun(region='us-en')
 @tool
 def calculator(first_num:float,second_num:float ,operation:str)->dict:
+    """Perform a basic arithmetic operation on two numbers and return a result payload."""
     try:
         if operation=='add':
             result=first_num+second_num
@@ -63,11 +66,11 @@ def calculator(first_num:float,second_num:float ,operation:str)->dict:
     
 @tool
 def get_stock_price(symbol:str)->dict:
-    url=
-    r-requests.get(url)
+    """Fetch the latest stock quote payload for a given ticker symbol from Alpha Vantage."""
+    url='https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=' + symbol + '&apikey=3W9II91AT919POF6'
+    r=requests.get(url)
     return r.json()
 tools=[search_tool, get_stock_price, calculator]
-llm_with_tools=ll.bind_tools(tools)
 
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
@@ -132,11 +135,6 @@ def chat_node(state: ChatState):
         }
 
     return {"messages": [AIMessage(content=response.text)]}
-
-tool_node=ToolNode(tools)
-
-
-
 
 conn=sqlite3.connect("chat_history.db",check_same_thread=False)
 
