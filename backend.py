@@ -1,5 +1,6 @@
 import os
-from typing import Annotated, TypedDict
+import tempfile
+from typing import Annotated, Any, Dict, Optional, TypedDict
 from pathlib import Path
 
 from google import genai as gemini
@@ -12,6 +13,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 import sqlite3
 import requests
+
 
 
 def _load_env_file(path: str = ".env") -> None:
@@ -43,6 +45,42 @@ FALLBACK_MODELS = [
     if model.strip()
 ]
 
+#pdf retiriever store
+_THREAD_RETRIEVERS: Dict[str, Any] = {}
+_THREAD_METADATA: Dict[str, dict] = {}
+
+def get_retriever(thread_id: str):
+    """Get the PDF retriever for a given thread ID."""
+    return _THREAD_RETRIEVERS.get(thread_id)
+    
+def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None):
+    """Ingest a PDF file and register metadata for it, associated with the given thread ID."""
+    if not file_bytes:
+        raise ValueError("No file bytes provided for ingestion.")
+
+    temp_path: Optional[str] = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_file:
+            temp_file.write(file_bytes)
+            temp_path = temp_file.name
+
+        _THREAD_RETRIEVERS[thread_id] = {"pdf_path": temp_path}
+        _THREAD_METADATA[thread_id] = {
+            "filename": filename or os.path.basename(temp_path),
+            "bytes": len(file_bytes),
+        }
+
+        return {
+            "filename": _THREAD_METADATA[thread_id]["filename"],
+            "bytes": _THREAD_METADATA[thread_id]["bytes"],
+        }
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
 #tools
 search_tool= DuckDuckGoSearchRun(region='us-en')
 @tool
@@ -70,8 +108,31 @@ def get_stock_price(symbol:str)->dict:
     url='https://www.alphavantage.co/query?function=GLOBAL_QUOTE&symbol=' + symbol + '&apikey=3W9II91AT919POF6'
     r=requests.get(url)
     return r.json()
-tools=[search_tool, get_stock_price, calculator]
 
+@tool
+def rag_tool(query:str,thread_id:Optional[str]=None)->dict:
+    """
+    retireve relevant information from the upoaded PDF for this chat thread.
+    Always include the thread_id when calling this tool.
+    """
+    retriever=get_retriever(thread_id)
+    if retriever is None:
+        return {
+            "error":"No document indexed for this chat . Upload a PDF first",
+            "query":query,
+        }
+
+    result=retriever.invoke(query)
+    context=[doc.page_content for doc in result]
+    metadata=[doc.metadata for doc in result]
+
+    return {
+        "query":query,
+        "context":context,
+        "metadata":metadata,
+    }
+
+tools=[search_tool, get_stock_price, calculator,rag_tool]
 class ChatState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
