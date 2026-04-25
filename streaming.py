@@ -5,7 +5,7 @@ import time
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 
-from backend import chatbot, retrieve_all_threads
+from backend import chatbot, ingest_pdf, retrieve_all_threads
 
 
 def generate_thread_id() -> str:
@@ -59,13 +59,39 @@ st.sidebar.title("LangGraph Chatbot")
 
 if st.sidebar.button("New chat"):
     reset_chat()
+    st.rerun()
 
-st.sidebar.header("My conversations")
-for thread_id in st.session_state["chat_threads"][::-1]:
-    if st.sidebar.button(f"Chat {thread_id[:8]}", key=f"thread-{thread_id}"):
-        st.session_state["thread_id"] = thread_id
-        st.session_state["message_history"] = load_conversation(thread_id)
+if "thread_docs" not in st.session_state:
+    st.session_state["thread_docs"] = {}
 
+thread_key = st.session_state["thread_id"]
+if thread_key not in st.session_state["thread_docs"]:
+    st.session_state["thread_docs"][thread_key] = {}
+
+thread_docs = st.session_state["thread_docs"][thread_key]
+
+if thread_docs:
+    latest_doc = list(thread_docs.values())[-1]
+    st.sidebar.success(
+        f"Using '{latest_doc.get('filename')}' "
+        f"({latest_doc.get('chunks')} chunks from {latest_doc.get('documents')} pages)"
+    )
+else:
+    st.sidebar.info("No PDF indexed yet.")
+
+uploaded_pdf = st.sidebar.file_uploader("Upload a PDF for this chat", type=["pdf"])
+if uploaded_pdf:
+    if uploaded_pdf.name in thread_docs:
+        st.sidebar.info(f"`{uploaded_pdf.name}` already processed for this chat.")
+    else:
+        with st.sidebar.status("Indexing PDF...", expanded=True) as status_box:
+            summary = ingest_pdf(
+                uploaded_pdf.getvalue(),
+                thread_id=thread_key,
+                filename=uploaded_pdf.name,
+            )
+            thread_docs[uploaded_pdf.name] = summary
+            status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
 
 for message in st.session_state["message_history"]:
     with st.chat_message(message["role"]):
