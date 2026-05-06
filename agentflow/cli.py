@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import subprocess
 import sys
 from pathlib import Path
@@ -13,10 +14,37 @@ except ImportError:  # pragma: no cover - handled at runtime
 
 from langchain_core.messages import HumanMessage
 
-from backend import chatbot
+
+_BACKEND_MODULE = None
+
+
+def _load_backend_module():
+    global _BACKEND_MODULE
+
+    if _BACKEND_MODULE is not None:
+        return _BACKEND_MODULE
+
+    backend_path = Path.cwd() / "backend.py"
+    if backend_path.exists():
+        spec = importlib.util.spec_from_file_location(
+            "agentflow_runtime_backend", backend_path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError(f"Unable to load backend module from {backend_path}")
+
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _BACKEND_MODULE = module
+        return module
+
+    import backend as module  # type: ignore[import-not-found]
+
+    _BACKEND_MODULE = module
+    return module
 
 
 def _invoke_chatbot(prompt: str, thread_id: str) -> str:
+    chatbot = _load_backend_module().chatbot
     response = chatbot.invoke(
         {"thread_id": thread_id, "messages": [HumanMessage(content=prompt)]},
         config={"configurable": {"thread_id": thread_id}},

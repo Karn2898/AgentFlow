@@ -2,6 +2,7 @@ langgraph
 langchain_core
 langchain
 langchain-community
+langgraph-checkpoint-sqlite
 ddgs
 streamlit
 google-genai

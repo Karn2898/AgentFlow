@@ -55,7 +55,15 @@ if "message_history" not in st.session_state:
     st.session_state["message_history"] = load_conversation(st.session_state["thread_id"])
 
 
-st.sidebar.title("LangGraph Chatbot")
+st.sidebar.title(" Random Chatbot")
+
+st.sidebar.subheader("Thread ID")
+st.sidebar.code(st.session_state["thread_id"])
+
+if st.session_state.get("chat_threads"):
+    with st.sidebar.expander("Saved thread IDs", expanded=False):
+        for thread_id in st.session_state["chat_threads"]:
+            st.write(thread_id)
 
 if st.sidebar.button("New chat"):
     reset_chat()

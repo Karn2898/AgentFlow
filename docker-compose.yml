@@ -1,6 +1,7 @@
 services:
   app:
     build: .
+    command: ["agentflow", "ui"]
     ports:
       - "8501:8501"
     environment:
