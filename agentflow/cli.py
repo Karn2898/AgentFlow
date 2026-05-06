@@ -72,7 +72,16 @@ def command_chat(thread_id: str) -> int:
 
 def command_ui() -> int:
     completed = subprocess.run(
-        [sys.executable, "-m", "streamlit", "run", "streaming.py"],
+        [
+            sys.executable,
+            "-m",
+            "streamlit",
+            "run",
+            "streaming.py",
+            "--server.address=0.0.0.0",
+            "--server.port=8501",
+            "--server.headless=true",
+        ],
         check=False,
     )
     return completed.returncode

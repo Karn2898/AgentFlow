@@ -33,6 +33,18 @@ The launcher is a small shell wrapper around the Python CLI:
 2. Set `GOOGLE_CLOUD_LOCATION` to a Vertex region such as `us-central1`.
 3. Ensure application default credentials are available for Vertex AI.
 
+## Docker
+
+Use Docker when you want a consistent environment without setting up Python locally.
+
+1. Build and run the Streamlit app:
+	`docker compose up --build`
+2. Open the app at `http://localhost:8501`.
+3. Stop it with `docker compose down`.
+4. Pass `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` through your shell or a compose environment file before starting.
+5. The container keeps `chat_history.db` mounted so chat history survives restarts.
+6. The image starts the Streamlit UI by default through the `agentflow ui` command.
+
 ## Notes
 
 Keep `chat_history.db` in place if you want chat history to persist locally.

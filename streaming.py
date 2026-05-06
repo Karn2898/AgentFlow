@@ -110,7 +110,7 @@ if uploaded_image:
     st.sidebar.caption(f"Loaded {image_summary['filename']} for editing.")
     st.sidebar.info("Ask in chat to edit the uploaded photo.")
 
-backend_image = get_image(thread_key, uploaded_image.name)
+backend_image = get_image(thread_key, uploaded_image.name) if uploaded_image else None
 if backend_image and backend_image.get("edited_bytes"):
     original_bytes = backend_image.get("bytes") or uploaded_image.getvalue()
     edited_bytes = backend_image["edited_bytes"]
@@ -119,7 +119,11 @@ if backend_image and backend_image.get("edited_bytes"):
     with col1:
         st.image(original_bytes, caption="Original", use_container_width=True)
     with col2:
-        st.image(edited_bytes, caption=f"Edited ({backend_image.get('model', 'vertex-image-edit')})", use_container_width=True)
+        st.image(
+            edited_bytes,
+            caption=f"Edited ({backend_image.get('model', 'vertex-image-edit')})",
+            use_container_width=True,
+        )
 
     st.download_button(
         "Download edited photo",

@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-us-central1}
+    volumes:
+      - ./chat_history.db:/app/chat_history.db

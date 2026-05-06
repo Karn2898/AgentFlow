@@ -1,0 +1,8 @@
+__pycache__/
+.venv/
+.git/
+.pytest_cache/
+.mypy_cache/
+chat_history.db
+*.pyc
+.env
