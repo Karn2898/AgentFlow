@@ -5,7 +5,7 @@ import time
 import streamlit as st
 from langchain_core.messages import AIMessage, HumanMessage
 
-from backend import chatbot, ingest_pdf, retrieve_all_threads
+from backend import chatbot, get_image, ingest_image, ingest_pdf, retrieve_all_threads
 
 
 def generate_thread_id() -> str:
@@ -93,6 +93,41 @@ if uploaded_pdf:
             thread_docs[uploaded_pdf.name] = summary
             status_box.update(label="✅ PDF indexed", state="complete", expanded=False)
 
+st.sidebar.divider()
+st.sidebar.subheader("Photo editor")
+
+uploaded_image = st.sidebar.file_uploader(
+    "Upload a photo for this chat",
+    type=["png", "jpg", "jpeg", "webp"],
+)
+
+if uploaded_image:
+    image_summary = ingest_image(
+        uploaded_image.getvalue(),
+        thread_id=thread_key,
+        filename=uploaded_image.name,
+    )
+    st.sidebar.caption(f"Loaded {image_summary['filename']} for editing.")
+    st.sidebar.info("Ask in chat to edit the uploaded photo.")
+
+backend_image = get_image(thread_key, uploaded_image.name)
+if backend_image and backend_image.get("edited_bytes"):
+    original_bytes = backend_image.get("bytes") or uploaded_image.getvalue()
+    edited_bytes = backend_image["edited_bytes"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(original_bytes, caption="Original", use_container_width=True)
+    with col2:
+        st.image(edited_bytes, caption=f"Edited ({backend_image.get('model', 'vertex-image-edit')})", use_container_width=True)
+
+    st.download_button(
+        "Download edited photo",
+        data=edited_bytes,
+        file_name=backend_image.get("output_filename", "edited-image.png"),
+        mime=backend_image.get("output_mime_type", "image/png"),
+    )
+
 for message in st.session_state["message_history"]:
     with st.chat_message(message["role"]):
         st.text(message["content"])
@@ -105,6 +140,7 @@ if user_input:
         st.text(user_input)
 
     config = {
+        "thread_id": st.session_state["thread_id"],
         "configurable": {"thread_id": st.session_state["thread_id"]},
         "metadata":{
             "thread_id":st.session_state["thread_id"]
@@ -115,7 +151,10 @@ if user_input:
     with st.chat_message("assistant"):
         def ai_only_stream():
             for message_chunk, _metadata in chatbot.stream(
-                {"messages": [HumanMessage(content=user_input)]},
+                {
+                    "thread_id": st.session_state["thread_id"],
+                    "messages": [HumanMessage(content=user_input)],
+                },
                 config=config,
                 stream_mode="messages",
             ):

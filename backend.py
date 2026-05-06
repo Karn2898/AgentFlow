@@ -5,6 +5,7 @@ from pathlib import Path
 
 from google import genai as gemini
 from google.genai.errors import APIError
+from google.genai import types
 from langchain.tools import tool
 from langchain_community.tools import DuckDuckGoSearchRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -45,9 +46,23 @@ FALLBACK_MODELS = [
     if model.strip()
 ]
 
+IMAGE_EDIT_MODEL = os.getenv("VERTEX_IMAGE_EDIT_MODEL", "imagen-3.0-capability-001")
+VERTEX_PROJECT = (
+    os.getenv("GOOGLE_CLOUD_PROJECT")
+    or os.getenv("GOOGLE_CLOUD_PROJECT_ID")
+    or os.getenv("GOOGLE_VERTEX_PROJECT")
+)
+VERTEX_LOCATION = (
+    os.getenv("GOOGLE_CLOUD_LOCATION")
+    or os.getenv("GOOGLE_CLOUD_REGION")
+    or os.getenv("GOOGLE_VERTEX_LOCATION")
+    or "us-central1"
+)
+
 #pdf retiriever store
 _THREAD_RETRIEVERS: Dict[str, Any] = {}
 _THREAD_METADATA: Dict[str, dict] = {}
+_THREAD_IMAGES: Dict[str, Dict[str, dict[str, Any]]] = {}
 
 def get_retriever(thread_id: str):
     """Get the PDF retriever for a given thread ID."""
@@ -80,6 +95,204 @@ def ingest_pdf(file_bytes: bytes, thread_id: str, filename: Optional[str] = None
                 os.remove(temp_path)
             except OSError:
                 pass
+
+
+def ingest_image(file_bytes: bytes, thread_id: str, filename: Optional[str] = None):
+    """Ingest an uploaded image for a chat thread."""
+    if not file_bytes:
+        raise ValueError("No image bytes provided for ingestion.")
+
+    thread_images = _THREAD_IMAGES.setdefault(thread_id, {})
+    key = filename or "uploaded-image"
+    existing_image = thread_images.get(key, {})
+    thread_images[key] = {
+        **existing_image,
+        "filename": key,
+        "bytes": file_bytes,
+        "mime_type": _guess_mime_type(filename),
+    }
+
+    return {
+        "filename": key,
+        "bytes": len(file_bytes),
+        "mime_type": thread_images[key]["mime_type"],
+    }
+
+
+def _guess_mime_type(filename: Optional[str]) -> str:
+    if not filename:
+        return "image/png"
+
+    lower_name = filename.lower()
+    if lower_name.endswith(".jpg") or lower_name.endswith(".jpeg"):
+        return "image/jpeg"
+    if lower_name.endswith(".webp"):
+        return "image/webp"
+    return "image/png"
+
+
+def get_image(thread_id: str, filename: Optional[str] = None):
+    """Get an uploaded image for a thread."""
+    thread_images = _THREAD_IMAGES.get(thread_id, {})
+    if not thread_images:
+        return None
+
+    if filename and filename in thread_images:
+        return thread_images[filename]
+
+    latest_key = list(thread_images.keys())[-1]
+    return thread_images[latest_key]
+
+
+def _get_image_edit_source(thread_id: str, filename: Optional[str] = None) -> tuple[dict[str, Any] | None, bytes | None]:
+    image_asset = get_image(thread_id, filename=filename)
+    if image_asset is None:
+        return None, None
+
+    source_bytes = image_asset.get("edited_bytes") or image_asset.get("current_bytes") or image_asset.get("bytes")
+    if source_bytes is None:
+        return image_asset, None
+
+    return image_asset, source_bytes
+
+
+def _build_vertex_client() -> gemini.Client | None:
+    if not VERTEX_PROJECT:
+        return None
+    return gemini.Client(vertexai=True, project=VERTEX_PROJECT, location=VERTEX_LOCATION)
+
+
+def edit_image(thread_id: str, instruction: str, filename: Optional[str] = None) -> dict[str, Any]:
+    """Send the uploaded image and instruction to Vertex Imagen for editing."""
+    image_asset, source_bytes = _get_image_edit_source(thread_id, filename=filename)
+    if image_asset is None:
+        return {
+            "error": "No image indexed for this chat. Upload a photo first.",
+            "instruction": instruction,
+        }
+    if source_bytes is None:
+        return {
+            "error": "The selected image has no bytes to edit.",
+            "instruction": instruction,
+        }
+
+    client = _build_vertex_client()
+    if client is None:
+        return {
+            "error": (
+                "Vertex AI is not configured. Set GOOGLE_CLOUD_PROJECT and a Vertex location "
+                "such as GOOGLE_CLOUD_LOCATION=us-central1, plus application default credentials."
+            ),
+            "instruction": instruction,
+        }
+
+    raw_ref_image = types.RawReferenceImage(
+        reference_id=1,
+        reference_image=types.Image(
+            image_bytes=source_bytes,
+            mime_type=image_asset["mime_type"],
+        ),
+    )
+
+    try:
+        response = client.models.edit_image(
+            model=IMAGE_EDIT_MODEL,
+            prompt=instruction,
+            reference_images=[raw_ref_image],
+            config=types.EditImageConfig(
+                edit_mode=types.EditMode.EDIT_MODE_DEFAULT,
+                number_of_images=1,
+                output_mime_type="image/png",
+                include_rai_reason=True,
+            ),
+        )
+    except APIError as exc:
+        return {
+            "error": f"Vertex image editing failed: {exc}",
+            "instruction": instruction,
+            "model": IMAGE_EDIT_MODEL,
+        }
+    except Exception as exc:
+        return {
+            "error": f"Unexpected image editing failure: {exc}",
+            "instruction": instruction,
+            "model": IMAGE_EDIT_MODEL,
+        }
+
+    if not response.generated_images:
+        return {
+            "error": "The image editor returned no output.",
+            "instruction": instruction,
+        }
+
+    generated_image = response.generated_images[0].image
+    edited_bytes = generated_image.image_bytes or b""
+    output_mime_type = generated_image.mime_type or "image/png"
+
+    thread_images = _THREAD_IMAGES.setdefault(thread_id, {})
+    stored_image = thread_images.setdefault(image_asset["filename"], {})
+    stored_image.update(
+        {
+            "filename": image_asset["filename"],
+            "bytes": image_asset.get("bytes", source_bytes),
+            "mime_type": image_asset["mime_type"],
+            "edited_bytes": edited_bytes,
+            "current_bytes": edited_bytes,
+            "current_mime_type": output_mime_type,
+            "output_filename": "edited-image.png",
+            "output_mime_type": output_mime_type,
+            "output_bytes": len(edited_bytes),
+            "model": IMAGE_EDIT_MODEL,
+        }
+    )
+
+    return {
+        "filename": image_asset["filename"],
+        "instruction": instruction,
+        "output_filename": "edited-image.png",
+        "output_mime_type": output_mime_type,
+        "output_bytes": len(edited_bytes),
+        "edited_bytes": edited_bytes,
+        "model": IMAGE_EDIT_MODEL,
+    }
+
+
+@tool
+def edit_uploaded_image(thread_id: str, instruction: str, filename: Optional[str] = None) -> dict:
+    """Edit an uploaded image for a chat thread and return the edited file payload."""
+    return edit_image(thread_id=thread_id, instruction=instruction, filename=filename)
+
+
+IMAGE_EDIT_KEYWORDS = {
+    "edit",
+    "photo",
+    "image",
+    "picture",
+    "brighten",
+    "darken",
+    "grayscale",
+    "gray",
+    "black and white",
+    "invert",
+    "negative",
+    "contrast",
+    "sharpen",
+    "blur",
+    "rotate",
+    "flip",
+    "mirror",
+    "background",
+    "remove",
+    "replace",
+    "style",
+    "make it",
+    "change the",
+}
+
+
+def _looks_like_image_edit_request(prompt: str) -> bool:
+    normalized = prompt.lower().strip()
+    return any(keyword in normalized for keyword in IMAGE_EDIT_KEYWORDS)
 
 #tools
 search_tool= DuckDuckGoSearchRun(region='us-en')
@@ -133,7 +346,35 @@ def rag_tool(query:str,thread_id:Optional[str]=None)->dict:
     }
 
 tools=[search_tool, get_stock_price, calculator,rag_tool]
+
+
+class ImageEditState(TypedDict):
+    thread_id: str
+    instruction: str
+    filename: Optional[str]
+    result: dict[str, Any]
+
+
+def image_edit_node(state: ImageEditState):
+    result = edit_uploaded_image.invoke(
+        {
+            "thread_id": state["thread_id"],
+            "instruction": state["instruction"],
+            "filename": state.get("filename"),
+        }
+    )
+    return {"result": result}
+
+
+image_edit_graph = StateGraph(ImageEditState)
+image_edit_graph.add_node("image_edit_node", image_edit_node)
+image_edit_graph.add_edge(START, "image_edit_node")
+image_edit_graph.add_edge("image_edit_node", END)
+photo_editor = image_edit_graph.compile()
+
+
 class ChatState(TypedDict):
+    thread_id: Optional[str]
     messages: Annotated[list[BaseMessage], add_messages]
 
 
@@ -171,6 +412,46 @@ def _generate_with_fallback(client: gemini.Client, prompt: str):
 
 def chat_node(state: ChatState):
     client = _build_client()
+    thread_id = state.get("thread_id") or "1"
+    messages = state["messages"]
+    user_prompt = str(messages[-1].content) if messages else ""
+
+    if _looks_like_image_edit_request(user_prompt):
+        image_asset = get_image(thread_id)
+        if image_asset is None:
+            return {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "Upload a photo first, then send your edit instruction again."
+                        )
+                    )
+                ]
+            }
+
+        edit_result = photo_editor.invoke(
+            {
+                "thread_id": thread_id,
+                "instruction": user_prompt,
+                "filename": image_asset.get("filename"),
+                "result": {},
+            }
+        )["result"]
+
+        if edit_result.get("error"):
+            return {"messages": [AIMessage(content=edit_result["error"])]}
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=(
+                        f"Edited '{edit_result.get('filename')}' with {edit_result.get('model')}. "
+                        f"Download the updated image from the sidebar."
+                    )
+                )
+            ]
+        }
+
     if client is None:
         return {
             "messages": [
@@ -178,7 +459,6 @@ def chat_node(state: ChatState):
             ]
         }
 
-    messages = state["messages"]
     prompt = "\n".join(str(m.content) for m in messages)
 
     try:
@@ -219,7 +499,7 @@ if __name__ == "__main__":
             break
 
         response = chatbot.invoke(
-            {"messages": [HumanMessage(content=user_message)]},
+            {"thread_id": "1", "messages": [HumanMessage(content=user_message)]},
             config={"configurable": {"thread_id": "1"}},
         )["messages"][-1].content
         print("chatbot:", response)
