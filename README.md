@@ -33,6 +33,18 @@ The launcher is a small shell wrapper around the Python CLI:
 2. Set `GOOGLE_CLOUD_LOCATION` to a Vertex region such as `us-central1`.
 3. Ensure application default credentials are available for Vertex AI.
 
+### Using Stability AI (optional fallback)
+
+You can use Stability AI for image edits instead of Vertex AI. When a `STABILITY_API_KEY` is present in your environment (or in `.env`), the app will prefer Stability for image editing and fall back to Vertex when no key is available.
+
+1. Obtain a Stability API key from https://platform.stability.ai/ and set `STABILITY_API_KEY` in your `.env` or shell.
+2. Optionally set `STABILITY_MODEL` to your preferred model (default: `stable-diffusion-512-v2-1`).
+3. Upload an image in the UI and ask an edit (e.g. "make it brighter").
+
+Notes:
+- The project currently loads local env vars from `.env` at startup. Do not commit `.env` to source control — rotate any keys that were accidentally exposed.
+- If you want Vertex only, unset `STABILITY_API_KEY` and ensure `GOOGLE_CLOUD_PROJECT` and credentials are configured.
+
 ## Docker
 
 Use Docker when you want a consistent environment without setting up Python locally.

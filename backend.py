@@ -14,6 +14,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 import sqlite3
 import requests
+import base64
 
 
 
@@ -58,6 +59,10 @@ VERTEX_LOCATION = (
     or os.getenv("GOOGLE_VERTEX_LOCATION")
     or "us-central1"
 )
+
+# Stability AI configuration (image editing fallback)
+STABILITY_API_KEY = os.getenv("STABILITY_API_KEY")
+STABILITY_MODEL = os.getenv("STABILITY_MODEL", "stable-diffusion-512-v2-1")
 
 #pdf retiriever store
 _THREAD_RETRIEVERS: Dict[str, Any] = {}
@@ -162,6 +167,63 @@ def _build_vertex_client() -> gemini.Client | None:
     return gemini.Client(vertexai=True, project=VERTEX_PROJECT, location=VERTEX_LOCATION)
 
 
+def _call_stability_edit(image_asset: dict[str, Any], source_bytes: bytes, instruction: str) -> dict[str, Any] | None:
+    """Call Stability AI image-to-image generation as an edit fallback.
+
+    Returns a dict with keys: bytes (edited image bytes), mime_type
+    or None on failure.
+    """
+    if not STABILITY_API_KEY:
+        return None
+
+    endpoint = f"https://api.stability.ai/v1/generation/{STABILITY_MODEL}/image-to-image"
+
+    # Use multipart/form-data: upload the source image as a file and send text prompt in form fields.
+    files = {
+        "init_image": ("init.png", source_bytes, image_asset.get("mime_type", "image/png"))
+    }
+
+    data = {
+        "text_prompts[0][text]": instruction,
+        "cfg_scale": "7",
+        "sampler": "ddim",
+        "steps": "30",
+        "samples": "1",
+    }
+
+    headers = {"Authorization": f"Bearer {STABILITY_API_KEY}"}
+
+    try:
+        resp = requests.post(endpoint, headers=headers, files=files, data=data, timeout=120)
+    except Exception as exc:
+        return {"error": f"Stability request failed: {exc}"}
+
+    if resp.status_code != 200:
+        try:
+            err = resp.json()
+        except Exception:
+            err = resp.text
+        return {"error": f"Stability API error {resp.status_code}: {err}"}
+
+    try:
+        body = resp.json()
+        artifacts = body.get("artifacts") or body.get("outputs") or []
+        if artifacts and isinstance(artifacts, list):
+            first = artifacts[0]
+            b64data = first.get("base64") or first.get("b64_json") or first.get("b64")
+            if b64data:
+                edited_bytes = base64.b64decode(b64data)
+                mime = first.get("mime_type") or "image/png"
+                return {"bytes": edited_bytes, "mime_type": mime}
+    except Exception:
+        pass
+
+    try:
+        return {"bytes": resp.content, "mime_type": image_asset.get("mime_type", "image/png")}
+    except Exception:
+        return {"error": "Unable to decode Stability response."}
+
+
 def edit_image(thread_id: str, instruction: str, filename: Optional[str] = None) -> dict[str, Any]:
     """Send the uploaded image and instruction to Vertex Imagen for editing."""
     image_asset, source_bytes = _get_image_edit_source(thread_id, filename=filename)
@@ -175,6 +237,45 @@ def edit_image(thread_id: str, instruction: str, filename: Optional[str] = None)
             "error": "The selected image has no bytes to edit.",
             "instruction": instruction,
         }
+
+    # Prefer Stability AI if an API key is provided (image editing fallback)
+    if STABILITY_API_KEY:
+        stability_result = _call_stability_edit(image_asset, source_bytes, instruction)
+        if stability_result is None:
+            # no key or unsupported, fall through to Vertex
+            pass
+        elif stability_result.get("error"):
+            return {"error": stability_result.get("error"), "instruction": instruction}
+        else:
+            edited_bytes = stability_result.get("bytes") or b""
+            output_mime_type = stability_result.get("mime_type") or image_asset.get("mime_type", "image/png")
+
+            thread_images = _THREAD_IMAGES.setdefault(thread_id, {})
+            stored_image = thread_images.setdefault(image_asset["filename"], {})
+            stored_image.update(
+                {
+                    "filename": image_asset["filename"],
+                    "bytes": image_asset.get("bytes", source_bytes),
+                    "mime_type": image_asset["mime_type"],
+                    "edited_bytes": edited_bytes,
+                    "current_bytes": edited_bytes,
+                    "current_mime_type": output_mime_type,
+                    "output_filename": "edited-image.png",
+                    "output_mime_type": output_mime_type,
+                    "output_bytes": len(edited_bytes),
+                    "model": f"stability:{STABILITY_MODEL}",
+                }
+            )
+
+            return {
+                "filename": image_asset["filename"],
+                "instruction": instruction,
+                "output_filename": "edited-image.png",
+                "output_mime_type": output_mime_type,
+                "output_bytes": len(edited_bytes),
+                "edited_bytes": edited_bytes,
+                "model": f"stability:{STABILITY_MODEL}",
+            }
 
     client = _build_vertex_client()
     if client is None:
