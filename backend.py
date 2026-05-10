@@ -64,6 +64,38 @@ VERTEX_LOCATION = (
 STABILITY_API_KEY = os.getenv("STABILITY_API_KEY")
 STABILITY_MODEL = os.getenv("STABILITY_MODEL", "stable-diffusion-512-v2-1")
 
+
+def _fetch_stability_models() -> list[str]:
+    """Return a list of available Stability model IDs (best-effort).
+
+    Returns an empty list if the request fails or the API key is missing.
+    """
+    if not STABILITY_API_KEY:
+        return []
+    try:
+        resp = requests.get(
+            "https://api.stability.ai/v1/models",
+            headers={"Authorization": f"Bearer {STABILITY_API_KEY}"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return []
+        body = resp.json()
+        if isinstance(body, dict) and "models" in body:
+            models = body.get("models") or []
+            return [m.get("id") for m in models if isinstance(m, dict) and m.get("id")]
+        if isinstance(body, list):
+            ids = []
+            for item in body:
+                if isinstance(item, dict) and item.get("id"):
+                    ids.append(item.get("id"))
+                elif isinstance(item, str):
+                    ids.append(item)
+            return ids
+        return []
+    except Exception:
+        return []
+
 #pdf retiriever store
 _THREAD_RETRIEVERS: Dict[str, Any] = {}
 _THREAD_METADATA: Dict[str, dict] = {}
@@ -176,7 +208,17 @@ def _call_stability_edit(image_asset: dict[str, Any], source_bytes: bytes, instr
     if not STABILITY_API_KEY:
         return None
 
-    endpoint = f"https://api.stability.ai/v1/generation/{STABILITY_MODEL}/image-to-image"
+    # Try to ensure we use a model that exists for this API key. If the
+    # configured `STABILITY_MODEL` isn't available, pick a reasonable
+    # fallback (e.g., a model containing 'stable' or 'diffusion').
+    chosen_model = STABILITY_MODEL
+    available = _fetch_stability_models()
+    if available and chosen_model not in available:
+        candidates = [m for m in available if ("stable" in m.lower() or "diffusion" in m.lower() or m.lower().startswith("sd"))]
+        if candidates:
+            chosen_model = candidates[0]
+
+    endpoint = f"https://api.stability.ai/v1/generation/{chosen_model}/image-to-image"
 
     # Use multipart/form-data: upload the source image as a file and send text prompt in form fields.
     files = {
@@ -186,7 +228,7 @@ def _call_stability_edit(image_asset: dict[str, Any], source_bytes: bytes, instr
     data = {
         "text_prompts[0][text]": instruction,
         "cfg_scale": "7",
-        "sampler": "ddim",
+        "sampler": "DDIM",
         "steps": "30",
         "samples": "1",
     }
