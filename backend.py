@@ -62,7 +62,13 @@ VERTEX_LOCATION = (
 
 # Stability AI configuration (image editing fallback)
 STABILITY_API_KEY = os.getenv("STABILITY_API_KEY")
-STABILITY_MODEL = os.getenv("STABILITY_MODEL", "stable-diffusion-512-v2-1")
+# Recommended Stability AI engine IDs (Stable Diffusion XL)
+STABILITY_RECOMMENDED_MODELS = [
+    "stable-diffusion-xl-1024-v1-0",
+    "stable-diffusion-xl-beta-v2-2-2",
+]
+# Default to the SDXL 1024 model; can be overridden with STABILITY_MODEL env var.
+STABILITY_MODEL = os.getenv("STABILITY_MODEL", "stable-diffusion-xl-1024-v1-0")
 
 
 def _fetch_stability_models() -> list[str]:
