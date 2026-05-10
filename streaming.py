@@ -1,4 +1,3 @@
-import uuid
 import re
 import time
 
@@ -9,7 +8,9 @@ from backend import chatbot, get_image, ingest_image, ingest_pdf, retrieve_all_t
 
 
 def generate_thread_id() -> str:
-    return str(uuid.uuid4())
+    existing_thread_ids = st.session_state.get("chat_threads") or []
+    numeric_thread_ids = [int(thread_id) for thread_id in existing_thread_ids if str(thread_id).isdigit()]
+    return str(max(numeric_thread_ids, default=0) + 1)
 
 
 def add_thread(thread_id: str) -> None:
@@ -43,6 +44,8 @@ def stream_word_by_word(text: str, delay: float = 0.03):
 
 if "thread_id" not in st.session_state:
     st.session_state["thread_id"] = generate_thread_id()
+elif not str(st.session_state["thread_id"]).isdigit():
+    st.session_state["thread_id"] = generate_thread_id()
 
 if "chat_threads" not in st.session_state:
     st.session_state["chat_threads"] = retrieve_all_threads()
@@ -62,7 +65,8 @@ st.sidebar.code(st.session_state["thread_id"])
 if st.session_state.get("chat_threads"):
     with st.sidebar.expander("Saved thread IDs", expanded=False):
         for thread_id in st.session_state["chat_threads"]:
-            st.write(thread_id)
+            label = f"Thread {thread_id}" if str(thread_id).isdigit() else thread_id
+            st.write(label)
 
 if st.sidebar.button("New chat"):
     reset_chat()

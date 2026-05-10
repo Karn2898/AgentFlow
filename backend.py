@@ -4,6 +4,8 @@ from typing import Annotated, Any, Dict, Optional, TypedDict
 from pathlib import Path
 
 from google import genai as gemini
+from google.auth import default as google_auth_default
+from google.auth.exceptions import DefaultCredentialsError
 from google.genai.errors import APIError
 from google.genai import types
 from langchain.tools import tool
@@ -205,6 +207,16 @@ def _build_vertex_client() -> gemini.Client | None:
     return gemini.Client(vertexai=True, project=VERTEX_PROJECT, location=VERTEX_LOCATION)
 
 
+def _has_google_adc() -> bool:
+    try:
+        google_auth_default()
+        return True
+    except DefaultCredentialsError:
+        return False
+    except Exception:
+        return False
+
+
 def _call_stability_edit(image_asset: dict[str, Any], source_bytes: bytes, instruction: str) -> dict[str, Any] | None:
     """Call Stability AI image-to-image generation as an edit fallback.
 
@@ -333,6 +345,16 @@ def edit_image(thread_id: str, instruction: str, filename: Optional[str] = None)
                 "such as GOOGLE_CLOUD_LOCATION=us-central1, plus application default credentials."
             ),
             "instruction": instruction,
+        }
+    if not _has_google_adc():
+        return {
+            "error": (
+                "Vertex AI is configured, but Application Default Credentials are missing. "
+                "Run `gcloud auth application-default login` or set `GOOGLE_APPLICATION_CREDENTIALS`, "
+                "or provide `STABILITY_API_KEY` to use the Stability fallback."
+            ),
+            "instruction": instruction,
+            "model": IMAGE_EDIT_MODEL,
         }
 
     raw_ref_image = types.RawReferenceImage(
